@@ -30,8 +30,6 @@ class iOS_Defaults_CLI:
 				p[key] = {}
 			p[key].update(value)
 		else:
-			if key not in p:
-				raise CLI_Error(f'Key {key} not found in {bundle}.plist')
 			p[key] = value
 
 		has.set_file_contents(f'Library/Preferences/{bundle}.plist', plistlib.dumps(p))
@@ -74,6 +72,39 @@ class iOS_Defaults_CLI:
 		has.set_file_contents(f'Library/Preferences/{bundle}.plist', plistlib.dumps(p))
 
 	@staticmethod
+	def export_defaults(device, bundle, output):
+		from pymobiledevice3.services.house_arrest import HouseArrestService
+		from pymobiledevice3.lockdown import create_using_usbmux
+
+		lockdown = create_using_usbmux(serial=device, autopair=True)
+
+		has = HouseArrestService(lockdown=lockdown, bundle_id=bundle)
+
+		i = has.get_file_contents(f'Library/Preferences/{bundle}.plist')
+		if output:
+			with open(output, 'wb') as f:
+				f.write(i)
+		else:
+			sys.stdout.buffer.write(i)
+
+	@staticmethod
+	def import_defaults(device, bundle, input):
+		from pymobiledevice3.services.house_arrest import HouseArrestService
+		from pymobiledevice3.lockdown import create_using_usbmux
+
+		lockdown = create_using_usbmux(serial=device, autopair=True)
+
+		has = HouseArrestService(lockdown=lockdown, bundle_id=bundle)
+
+		if input:
+			with open(input, 'rb') as f:
+				i = f.read()
+		else:
+			i = sys.stdin.buffer.read()
+
+		has.set_file_contents(f'Library/Preferences/{bundle}.plist', i)
+
+	@staticmethod
 	def list_devices():
 		from pymobiledevice3.lockdown import create_using_usbmux
 		from pymobiledevice3.usbmux import list_devices
@@ -93,7 +124,10 @@ def parse_value(args, in_composite=False):
 	if type_token == "-string":
 		return str(args.pop(0))
 	elif type_token == "-data":
-		return args.pop(0)
+		if not args or not all(c in "0123456789abcdefABCDEF" for c in args[0]):
+			raise CLI_Error("Expected hex digits after -data")
+
+		return bytes.fromhex(args.pop(0))
 	elif type_token in ("-int", "-integer"):
 		return int(args.pop(0))
 	elif type_token == "-float":
@@ -129,18 +163,18 @@ def main():
 	parser.add_argument('-d', '--device', type=str, help='UUID of the device', required=False)
 	subparsers = parser.add_subparsers(dest='command', help='subcommand help')
 
-	list_devices_parser = subparsers.add_parser('list', help='list all devices')
+	list_devices_parser = subparsers.add_parser('list-devices', help='list all connected devices\n\r')
 
 	read_parser = subparsers.add_parser('read', help='read defaults')
 	read_parser.add_argument('bundle', type=str, help='app bundle id to read')
 	read_parser.add_argument('key', type=str, help='key to read', nargs='?')
 
-	write_parser = subparsers.add_parser('write', help='write defaults')
+	write_parser = subparsers.add_parser('write', help='write key for value')
 	write_parser.add_argument('bundle', type=str, help='app bundle id to write')
 	write_parser.add_argument('key', type=str, help='key to write')
 	write_parser.add_argument(
 		"value",
-		nargs="+",
+		nargs=argparse.REMAINDER,
 		help=(
 			"Value to write. Supported formats:\n"
 			"  -string <string_value>\n"
@@ -154,9 +188,17 @@ def main():
 		),
 	)
 
-	delete_parser = subparsers.add_parser('delete', help='delete defaults')
+	delete_parser = subparsers.add_parser('delete', help='delete defaults key-value pair')
 	delete_parser.add_argument('bundle', type=str, help='app bundle id to delete')
 	delete_parser.add_argument('key', type=str, help='key to delete')
+
+	export_parser = subparsers.add_parser('export', help='export all defaults for bundle to stdout or file')
+	export_parser.add_argument('bundle', type=str, help='app bundle id to export')
+	export_parser.add_argument('--output', '-o', type=str, help='file to export to')
+
+	import_parser = subparsers.add_parser('import', help='import all defaults for bundle')
+	import_parser.add_argument('bundle', type=str, help='app bundle id to import')
+	import_parser.add_argument('--input', '-i', type=str, help='file to import')
 
 	args = parser.parse_args()
 
@@ -181,8 +223,14 @@ def main():
 	elif args.command == 'delete':
 		iOS_Defaults_CLI.delete(args.device, args.bundle, args.key)
 
-	elif args.command == 'list':
+	elif args.command == 'list-devices':
 		iOS_Defaults_CLI.list_devices()
+
+	elif args.command == 'export':
+		iOS_Defaults_CLI.export_defaults(args.device, args.bundle, args.output)
+
+	elif args.command == 'import':
+		iOS_Defaults_CLI.import_defaults(args.device, args.bundle, args.input)
 
 	else:
 		parser.print_help()
