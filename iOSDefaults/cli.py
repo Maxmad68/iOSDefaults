@@ -1,48 +1,128 @@
 import sys
-
 import argparse
-from .commands import write, read, delete, list
+import datetime
+import plistlib
+from pprint import pprint
 
-def error(message):
-	print(f"Error: {message}", file=sys.stderr)
-	sys.exit(1)
+class CLI_Error(Exception):
+	def __init__(self, message):
+		print ("Error: ", message, file=sys.stderr)
+		sys.exit(1)
 
-def parse_type_value(args):
-	"""Parse a value argument into a typed value."""
-	type = args.pop(0)
-	if type == "-int":
-		value = int(args.pop(0))
-	elif type == "-float":
-		value = float(args.pop(0))
-	elif type == "-bool":
-		value = args.pop(0).lower() in ["true", "yes", "1"]
-	elif type == "-data":
-		value = args.pop(0)
-	elif type == "-string":
-		value = args.pop(0)
-	elif type in ("-array", "-array-add", "-dict", "-dict-add"):
-		raise ValueError("Nested composite types are not supported")
+class iOS_Defaults_CLI:
+	@staticmethod
+	def write(device_udid, bundle, key, value, adding=False):
+		from pymobiledevice3.services.house_arrest import HouseArrestService
+		from pymobiledevice3.lockdown import create_using_usbmux
+
+		lockdown = create_using_usbmux(serial=device_udid, autopair=True)
+
+		has = HouseArrestService(lockdown=lockdown, bundle_id=bundle)
+
+		i = has.get_file_contents(f'Library/Preferences/{bundle}.plist')
+		p = plistlib.loads(i)
+		if isinstance(value, list) and adding:
+			if key not in p:
+				p[key] = []
+			p[key].extend(value)
+		elif isinstance(value, dict) and adding:
+			if key not in p:
+				p[key] = {}
+			p[key].update(value)
+		else:
+			if key not in p:
+				raise CLI_Error(f'Key {key} not found in {bundle}.plist')
+			p[key] = value
+
+		has.set_file_contents(f'Library/Preferences/{bundle}.plist', plistlib.dumps(p))
+
+	@staticmethod
+	def read(device_udid, bundle, key):
+		from pymobiledevice3.services.house_arrest import HouseArrestService
+		from pymobiledevice3.lockdown import create_using_usbmux
+
+		lockdown = create_using_usbmux(serial=device_udid, autopair=True)
+
+		has = HouseArrestService(lockdown=lockdown, bundle_id=bundle)
+
+		i = has.get_file_contents(f'Library/Preferences/{bundle}.plist')
+		p = plistlib.loads(i)
+		if key:
+			if key not in p:
+				raise CLI_Error(f'Key {key} not found in {bundle}.plist')
+			pprint (p[key])
+		else:
+			pprint(p)
+
+	@staticmethod
+	def delete(device, bundle, key):
+		from pymobiledevice3.services.house_arrest import HouseArrestService
+		from pymobiledevice3.lockdown import create_using_usbmux
+
+		lockdown = create_using_usbmux(serial=device, autopair=True)
+
+		has = HouseArrestService(lockdown=lockdown, bundle_id=bundle)
+
+		i = has.get_file_contents(f'Library/Preferences/{bundle}.plist')
+		p = plistlib.loads(i)
+
+		if key in p:
+			del p[key]
+		else:
+			sys.exit(1)
+
+		has.set_file_contents(f'Library/Preferences/{bundle}.plist', plistlib.dumps(p))
+
+	@staticmethod
+	def list_devices():
+		from pymobiledevice3.lockdown import create_using_usbmux
+		from pymobiledevice3.usbmux import list_devices
+
+		devices = list_devices()
+		for device in devices:
+			lockdown = create_using_usbmux(device.serial, autopair=False, connection_type=device.connection_type)
+			print(lockdown.short_info['DeviceName'], f'({device.serial})')
+
+
+def parse_value(args, in_composite=False):
+	"""Parse a single value recursively."""
+	if not args:
+		raise ValueError("Expected a value but found none.")
+
+	type_token = args.pop(0)
+	if type_token == "-string":
+		return str(args.pop(0))
+	elif type_token == "-data":
+		return args.pop(0)
+	elif type_token in ("-int", "-integer"):
+		return int(args.pop(0))
+	elif type_token == "-float":
+		return float(args.pop(0))
+	elif type_token in ("-bool", "-boolean"):
+		return args.pop(0).lower() in ["true", "yes", "1"]
+	elif type_token == "-date":
+		return datetime.fromisoformat(args.pop(0))
+	elif type_token in ("-array", "-array-add"):
+		if in_composite:
+			raise CLI_Error("Nested composite types are not supported.")
+		array = []
+		while args:
+			array.append(parse_value(args, in_composite=True))
+		return array
+	elif type_token in ("-dict", "-dict-add"):
+		if in_composite:
+			raise CLI_Error("Nested composite types are not supported.")
+		dictionary = {}
+		while args:
+			key = args.pop(0)
+			value = parse_value(args, in_composite=True)
+			dictionary[key] = value
+		return dictionary
+
+	elif type_token.startswith("-"):
+		raise CLI_Error(f"Unknown value type: {type_token}")
 	else:
-		value = type
-	return value
-
-def parse_array(array_args):
-	"""Parse an array argument into typed elements."""
-	parsed_array = []
-	while array_args:
-		parsed_array.append(parse_type_value(array_args))
-
-	return parsed_array
-
-def parse_dict(dict_args):
-	"""Parse a dictionary argument into typed key-value pairs."""
-	parsed_dict = {}
-	while dict_args:
-		key = dict_args.pop(0)
-		value = parse_type_value(dict_args)
-		parsed_dict[key] = value
-
-	return parsed_dict
+		return type_token
 
 def main():
 	parser = argparse.ArgumentParser(prog=sys.argv[0])
@@ -58,17 +138,21 @@ def main():
 	write_parser = subparsers.add_parser('write', help='write defaults')
 	write_parser.add_argument('bundle', type=str, help='app bundle id to write')
 	write_parser.add_argument('key', type=str, help='key to write')
-	value_group = write_parser.add_mutually_exclusive_group(required=True)
-	value_group.add_argument("value", nargs="?", help="The value to write (general string).")
-	value_group.add_argument("-string", dest="string_value", help="A string value.")
-	value_group.add_argument("-data", dest="data_value", help="Hexadecimal data.")
-	value_group.add_argument("-int", "-integer", dest="int_value", type=int, help="An integer value.")
-	value_group.add_argument("-float", dest="float_value", type=float, help="A floating-point value.")
-	value_group.add_argument("-bool", "-boolean", dest="bool_value", choices=["true", "false", "yes", "no", "1", "0"], help="A boolean value (true, false, yes, no, 1, 0).")
-	value_group.add_argument("-array", dest="array_values", nargs=argparse.REMAINDER, help="An array of values with their types (-string, -int, etc.).")
-	value_group.add_argument("-array-add", dest="array_add_values", nargs=argparse.REMAINDER, help="An array of values with their types (-string, -int, etc.) to append to existing array.")
-	value_group.add_argument("-dict", dest="dict_values", nargs=argparse.REMAINDER, help="An dictionary of key and values with their types (-string, -int, etc.).")
-	value_group.add_argument("-dict-add", dest="dict_values", nargs=argparse.REMAINDER, help="An dictionary of key and values with their types (-string, -int, etc.) to add to existing array.")
+	write_parser.add_argument(
+		"value",
+		nargs="+",
+		help=(
+			"Value to write. Supported formats:\n"
+			"  -string <string_value>\n"
+			"  -data <hex_digits>\n"
+			"  -int[eger] <integer_value>\n"
+			"  -float <floating_point_value>\n"
+			"  -bool[ean] (true | false | yes | no)\n"
+			"  -date <date_representation>\n"
+			"  -array <value1> <value2> ...\n"
+			"  -dict <key1> <value1> <key2> <value2> ..."
+		),
+	)
 
 	delete_parser = subparsers.add_parser('delete', help='delete defaults')
 	delete_parser.add_argument('bundle', type=str, help='app bundle id to delete')
@@ -78,52 +162,30 @@ def main():
 
 
 	if args.command == 'read':
-		read(args.device, args.bundle, args.key)
+		iOS_Defaults_CLI.read(args.device, args.bundle, args.key)
 
 	elif args.command == 'write':
-		if args.string_value is not None:
-			value = str(args.string_value)
-		elif args.data_value is not None:
-			value = str(args.data_value)
-		elif args.int_value is not None:
-			value = int(args.int_value)
-		elif args.float_value is not None:
-			value = float(args.float_value)
-		elif args.bool_value is not None:
-			value = args.bool_value.lower() in ["true", "yes", "1"]
-		elif args.array_values is not None:
-			try:
-				value = parse_array(args.array_values)
-			except ValueError as e:
-				print(f"Error parsing array: {e}")
-				return
-		elif args.array_add_values is not None:
-			try:
-				value = parse_array(args.array_add_values)
-			except ValueError as e:
-				print(f"Error parsing array: {e}")
-				return
-		elif args.dict_values is not None:
-			try:
-				value = parse_dict(args.dict_values)
-			except ValueError as e:
-				print(f"Error parsing array: {e}")
-				return
-		else:
-			value = args.value
-			value_type = "default"
+		adding = args.value and args.value[0] in ("-array-add", "-dict-add")
+		value = parse_value(args.value)
+		if args.value:
+			raise CLI_Error(f"Unexpected arguments: {', '.join(args.value)}")
 
-		write(
+		iOS_Defaults_CLI.write(
 			args.device,
 			args.bundle,
 			args.key,
 			value,
-			array_add=args.array_add_values is not None,
-			dict_add=args.dict_values is not None
+			adding=adding,
 		)
+
 	elif args.command == 'delete':
-		delete(args.device, args.bundle, args.key)
+		iOS_Defaults_CLI.delete(args.device, args.bundle, args.key)
+
 	elif args.command == 'list':
-		list()
+		iOS_Defaults_CLI.list_devices()
+
 	else:
 		parser.print_help()
+
+if __name__ == '__main__':
+	main()
