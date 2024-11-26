@@ -64,7 +64,7 @@ def main():
 	value_group.add_argument("-data", dest="data_value", help="Hexadecimal data.")
 	value_group.add_argument("-int", "-integer", dest="int_value", type=int, help="An integer value.")
 	value_group.add_argument("-float", dest="float_value", type=float, help="A floating-point value.")
-	value_group.add_argument("-bool", "-boolean", dest="bool_value", choices=["true", "false", "yes", "no", "1","0"], help="A boolean value (true, false, yes, no, 1, 0).")
+	value_group.add_argument("-bool", "-boolean", dest="bool_value", choices=["true", "false", "yes", "no", "1", "0"], help="A boolean value (true, false, yes, no, 1, 0).")
 	value_group.add_argument("-array", dest="array_values", nargs=argparse.REMAINDER, help="An array of values with their types (-string, -int, etc.).")
 	value_group.add_argument("-array-add", dest="array_add_values", nargs=argparse.REMAINDER, help="An array of values with their types (-string, -int, etc.) to append to existing array.")
 	value_group.add_argument("-dict", dest="dict_values", nargs=argparse.REMAINDER, help="An dictionary of key and values with their types (-string, -int, etc.).")
@@ -90,7 +90,7 @@ def main():
 		elif args.float_value is not None:
 			value = float(args.float_value)
 		elif args.bool_value is not None:
-			value = args.bool_value.lower() in ["true", "yes"]
+			value = args.bool_value.lower() in ["true", "yes", "1"]
 		elif args.array_values is not None:
 			try:
 				value = parse_array(args.array_values)
