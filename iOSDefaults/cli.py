@@ -35,7 +35,14 @@ class iOS_Defaults_CLI:
 		has.set_file_contents(f'Library/Preferences/{bundle}.plist', plistlib.dumps(p))
 
 	@staticmethod
-	def read(device_udid, bundle, key):
+	def read(device_udid, bundle, key, json_output):
+		if json_output:
+			import json
+			def out(i):
+				print (json.dumps(i))
+		else:
+			out = pprint
+
 		from pymobiledevice3.services.house_arrest import HouseArrestService
 		from pymobiledevice3.lockdown import create_using_usbmux
 
@@ -48,9 +55,9 @@ class iOS_Defaults_CLI:
 		if key:
 			if key not in p:
 				raise CLI_Error(f'Key {key} not found in {bundle}.plist')
-			pprint (p[key])
+			out (p[key])
 		else:
-			pprint(p)
+			out (p)
 
 	@staticmethod
 	def delete(device, bundle, key):
@@ -168,6 +175,7 @@ def main():
 	read_parser = subparsers.add_parser('read', help='read defaults')
 	read_parser.add_argument('bundle', type=str, help='app bundle id to read')
 	read_parser.add_argument('key', type=str, help='key to read', nargs='?')
+	read_parser.add_argument('-j', '--json', action='store_true', help='Outputs as JSON', required=False)
 
 	write_parser = subparsers.add_parser('write', help='write key for value')
 	write_parser.add_argument('bundle', type=str, help='app bundle id to write')
@@ -204,7 +212,7 @@ def main():
 
 
 	if args.command == 'read':
-		iOS_Defaults_CLI.read(args.device, args.bundle, args.key)
+		iOS_Defaults_CLI.read(args.device, args.bundle, args.key, args.json)
 
 	elif args.command == 'write':
 		adding = args.value and args.value[0] in ("-array-add", "-dict-add")
